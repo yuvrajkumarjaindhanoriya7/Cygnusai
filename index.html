@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>My Personal AI Knowledge Base</title>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <style>
+    body { font-family: system-ui, sans-serif; background: #0f172a; color: #e2e8f0; margin: 0; padding: 0; }
+    .container { max-width: 900px; margin: 0 auto; padding: 20px; }
+    h1 { text-align: center; color: #60a5fa; }
+    #chat { height: 70vh; overflow-y: auto; background: #1e2937; padding: 20px; border-radius: 12px; margin-bottom: 20px; }
+    .message { margin-bottom: 20px; padding: 12px; border-radius: 8px; }
+    .user { background: #3b82f6; align-self: flex-end; margin-left: 20%; }
+    .ai { background: #334155; }
+    input { width: 75%; padding: 14px; border: none; border-radius: 8px; font-size: 16px; }
+    button { padding: 14px 28px; background: #60a5fa; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; }
+    .sources { font-size: 0.85rem; opacity: 0.8; margin-top: 8px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🤖 My AI Knowledge Base + Wikipedia</h1>
+    <p style="text-align:center; color:#94a3b8;">Ask anything — it searches your repo docs first, then Wikipedia.</p>
+    
+    <div id="chat"></div>
+    
+    <div style="display:flex; gap:10px;">
+      <input type="text" id="query" placeholder="Ask about your documents or any topic..." onkeypress="if(event.key==='Enter') ask()">
+      <button onclick="ask()">Send</button>
+    </div>
+    
+    <p style="text-align:center; margin-top:20px; font-size:0.9rem; color:#64748b;">
+      Add files to <code>docs/</code> folder in this repo &amp; push — they become part of the knowledge base instantly.
+    </p>
+  </div>
+
+  <script>
+    const REPO = 'YOUR_USERNAME/YOUR_REPO_NAME'; // ← CHANGE THIS
+    const DOCS_FOLDER = 'docs/';
+
+    let allDocs = [];
+
+    // Load all documents from repo
+    async function loadAllDocs() {
+      if (allDocs.length > 0) return allDocs;
+      
+      // For production: use GitHub Tree API for dynamic listing
+      // Here we start simple — add your filenames or improve later
+      const exampleFiles = ['example.md']; // replace with real files or implement dynamic list
+      
+      for (let file of exampleFiles) {
+        try {
+          const res = await fetch(`https://raw.githubusercontent.com/${REPO}/main/${DOCS_FOLDER}${file}`);
+          if (res.ok) {
+            const content = await res.text();
+            allDocs.push({ name: file, content: content });
+          }
+        } catch(e) {}
+      }
+      
+      // Fallback demo content
+      if (allDocs.length === 0) {
+        allDocs.push({
+          name: "demo.md",
+          content: "This is sample knowledge. You can add real Markdown/TXT files in the docs/ folder."
+        });
+      }
+      return allDocs;
+    }
+
+    function simpleSearch(query, docs) {
+      let best = { score: 0, doc: null };
+      const q = query.toLowerCase();
+      
+      docs.forEach(doc => {
+        const text = doc.content.toLowerCase();
+        const score = (text.match(new RegExp(q, 'g')) || []).length * 2 +
+                     (text.includes(q) ? 10 : 0);
+        if (score > best.score) {
+          best = { score, doc };
+        }
+      });
+      return best;
+    }
+
+    async function getWikipediaSummary(query) {
+      try {
+        const searchRes = await fetch(
+          `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(query)}&format=json&origin=*`
+        );
+        const searchData = await searchRes.json();
+        
+        if (!searchData.query?.search?.length) return null;
+        
+        const title = searchData.query.search[0].title;
+        
+        const summaryRes = await fetch(
+          `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(title)}`
+        );
+        const data = await summaryRes.json();
+        
+        return {
+          title: data.title,
+          summary: data.extract,
+          url: data.content_urls?.desktop?.page || `https://en.wikipedia.org/wiki/${encodeURIComponent(title)}`
+        };
+      } catch(e) {
+        console.error(e);
+        return null;
+      }
+    }
+
+    async function ask() {
+      const input = document.getElementById('query');
+      const userQuery = input.value.trim();
+      if (!userQuery) return;
+
+      addMessage('user', userQuery);
+      input.value = '';
+
+      const docs = await loadAllDocs();
+      const local = simpleSearch(userQuery, docs);
+
+      let responseText = '';
+      let sources = [];
+
+      if (local.score > 3) {
+        responseText = `**From your documents (${local.doc.name}):**\n\n${local.doc.content.substring(0, 1500)}${local.doc.content.length > 1500 ? '...' : ''}`;
+        sources.push(local.doc.name);
+      } else {
+        const wiki = await getWikipediaSummary(userQuery);
+        if (wiki) {
+          responseText = `**Wikipedia — ${wiki.title}**\n\n${wiki.summary}\n\n[Read full article](${wiki.url})`;
+          sources.push('Wikipedia');
+        } else {
+          responseText = "Sorry, I couldn't find relevant information in your documents or on Wikipedia.";
+        }
+      }
+
+      addMessage('ai', responseText, sources);
+    }
+
+    function addMessage(sender, text, sources = []) {
+      const chat = document.getElementById('chat');
+      const sourceHtml = sources.length ? `<div class="sources">Sources: ${sources.join(', ')}</div>` : '';
+      
+      chat.innerHTML += `
+        <div class="message ${sender}">
+          <strong>${sender === 'user' ? 'You' : 'AI'}:</strong><br>
+          ${marked.parse(text)}
+          ${sourceHtml}
+        </div>`;
+      chat.scrollTop = chat.scrollHeight;
+    }
+
+    // Initialize
+    window.onload = async () => {
+      await loadAllDocs();
+      addMessage('ai', 'Hello! I can answer from your repo documents or Wikipedia. What would you like to know?');
+    };
+  </script>
+</body>
+</html>
